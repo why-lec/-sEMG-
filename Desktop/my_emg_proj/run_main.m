@@ -48,7 +48,7 @@ trialMean = summarizeByTrial(feat, numel(out.files), 'mean');
 plot_feature = 'RMS';%想要绘制的特征名
 plotTrialFeatureBox(trialMean, plot_feature,1:6);
 
-%}
+%} 
 
 clear; clc;
 
@@ -119,30 +119,39 @@ Yall = [ ...
 
 % ============================================================
 % E) 特征标准化（非常重要：不同特征量纲差异很大）
-%    zscore: 每一列都变成 “均值0、方差1”
 % ============================================================
-[Xall_z, mu, sigma] = zscore(Xall); %#ok<NASGU>
+K = 5;
+cvp = cvpartition(Yall, 'KFold', K);
+
+yhat = zeros(size(Yall));
+
+for k = 1:K
+    trIdx = training(cvp, k);
+    teIdx = test(cvp, k);
+
+    % 仅用训练集计算 zscore（避免数据泄漏）
+    [Xtr_z, mu, sigma] = zscore(Xall(trIdx, :));
+    Xte_z = (Xall(teIdx, :) - mu) ./ sigma;
+
+    % 训练三分类 SVM（fitcecoc = 多分类框架，内部用多个二分类SVM）
+    t = templateSVM( ...
+        'KernelFunction', 'rbf', ... % RBF核（常用且效果一般不错）
+        'KernelScale', 'auto', ...   % 自动核尺度
+        'Standardize', false);       % 我们已经手动zscore了，所以这里false
+
+    Mdl = fitcecoc(Xtr_z, Yall(trIdx), ...
+        'Learners', t, ...
+        'ClassNames', [1 2 3]);
+
+    % 预测
+    yhat(teIdx) = predict(Mdl, Xte_z);
+end
 
 % ============================================================
-% F) 训练三分类 SVM（fitcecoc = 多分类框架，内部用多个二分类SVM）
+% F) 严格 5-fold 交叉验证评估
 % ============================================================
-t = templateSVM( ...
-    'KernelFunction', 'rbf', ... % RBF核（常用且效果一般不错）
-    'KernelScale', 'auto', ...   % 自动核尺度
-    'Standardize', false);       % 我们已经手动zscore了，所以这里false
-
-Mdl = fitcecoc(Xall_z, Yall, ...
-    'Learners', t, ...
-    'ClassNames', [1 2 3]);
-
-% ============================================================
-% G) 用5折交叉验证评估（先做一个基线准确率）
-% ============================================================
-CV = crossval(Mdl, 'KFold', 5);  % ��数据分成5份轮流验证
-yhat = kfoldPredict(CV);         % 得到每条样本的预测类别
-
 acc = mean(yhat == Yall);        % 计算总体准确率
-fprintf('5-fold CV accuracy = %.2f%%\n', 100*acc);
+fprintf('Strict 5-fold CV accuracy = %.2f%%\n', 100*acc);
 
 % 混淆矩阵：看每一类被错分到哪里
 C = confusionmat(Yall, yhat);
@@ -154,10 +163,10 @@ figure;
 confusionchart(Yall, yhat, ...
     'RowSummary','row-normalized', ...
     'ColumnSummary','column-normalized');
-title('SVM (ECOC) 5-fold CV confusion chart');
+title('SVM (ECOC) strict 5-fold CV confusion chart');
 
 % ============================================================
-% H) （可选）你之前的箱线图还想画也行：
+% G) （可选）你之前的箱线图还想画也行：
 %     例如画 “捏” 这个手势的 RMS 6通道箱线图
 % ============================================================
 % trialMeanNie = struct('X', X_nie, 'featureNames', featureNames);
